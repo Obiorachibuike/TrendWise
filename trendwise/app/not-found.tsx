@@ -1,8 +1,9 @@
-"use client";
+// app/not-found.tsx
+'use client';
 
-import React from "react";
-import Link from "next/link";
-import { FaExclamationTriangle } from "react-icons/fa";
+import React from 'react';
+import Link from 'next/link';
+import { FaExclamationTriangle } from 'react-icons/fa';
 
 export default function NotFound() {
   return (
