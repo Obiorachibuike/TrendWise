@@ -1,4 +1,4 @@
-import NextAuth from "next-auth";
+import NextAuth, { type NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import FacebookProvider from "next-auth/providers/facebook";
 import TwitterProvider from "next-auth/providers/twitter";
@@ -8,11 +8,10 @@ import LinkedInProvider from "next-auth/providers/linkedin";
 import TwitchProvider from "next-auth/providers/twitch";
 import RedditProvider from "next-auth/providers/reddit";
 import axios from "axios";
-import type { NextAuthOptions } from "next-auth";
 import type { JWT } from "next-auth/jwt";
 import type { Session, User } from "next-auth";
 
-const handler = NextAuth({
+const authOptions: NextAuthOptions = {
   providers: [
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID!,
@@ -49,20 +48,18 @@ const handler = NextAuth({
   ],
   secret: process.env.NEXTAUTH_SECRET,
   callbacks: {
-    async signIn({ user }: { user: User }) {
+    async signIn({ user }) {
       try {
         const res = await axios.get(`${process.env.NEXTAUTH_URL}/api/users`, {
           params: { email: user.email },
         });
 
-        if (res.data && res.data.user) {
-          return true;
-        }
+        if (res.data?.user) return true;
 
         await axios.post(`${process.env.NEXTAUTH_URL}/api/users`, {
-          name: user.name,
+          name: user.name ?? "No Name",
           email: user.email,
-          image: user.image,
+          image: user.image ?? "",
         });
 
         return true;
@@ -71,13 +68,13 @@ const handler = NextAuth({
         return false;
       }
     },
-    async jwt({ token, user }: { token: JWT; user?: User }) {
-      if (user) {
+    async jwt({ token, user }) {
+      if (user?.id) {
         token.id = user.id;
       }
       return token;
     },
-    async session({ session, token }: { session: Session; token: JWT }) {
+    async session({ session, token }) {
       if (session.user && token.id) {
         session.user.id = token.id as string;
       }
@@ -88,7 +85,9 @@ const handler = NextAuth({
     signIn: "/login",
     error: "/auth/error",
   },
-  debug: true,
-} satisfies NextAuthOptions);
+  debug: process.env.NODE_ENV === "development",
+};
+
+const handler = NextAuth(authOptions);
 
 export { handler as GET, handler as POST };
