@@ -1,4 +1,6 @@
-import NextAuth, { NextAuthOptions, Session, User } from "next-auth";
+// app/api/auth/[...nextauth]/route.ts
+
+import NextAuth, { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import FacebookProvider from "next-auth/providers/facebook";
 import TwitterProvider from "next-auth/providers/twitter";
@@ -8,9 +10,10 @@ import LinkedInProvider from "next-auth/providers/linkedin";
 import TwitchProvider from "next-auth/providers/twitch";
 import RedditProvider from "next-auth/providers/reddit";
 import { JWT } from "next-auth/jwt";
+import { Session, User } from "next-auth";
 import axios from "axios";
 
-const authOptions: NextAuthOptions = {
+export const authOptions: NextAuthOptions = {
   providers: [
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID!,
@@ -89,6 +92,7 @@ const authOptions: NextAuthOptions = {
   debug: true,
 };
 
-// ✅ Only export the route handler
+// ✅ Correct export for Next.js 13+ App Router
 const handler = NextAuth(authOptions);
+
 export { handler as GET, handler as POST };
