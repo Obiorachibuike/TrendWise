@@ -12,18 +12,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ message: 'Missing required fields' }, { status: 400 });
     }
 
-    await resend.emails.send({
-      from: 'Your Name <no-reply@yourdomain.com>', // Replace with a verified sender
-      to: 'obuorachibuike22@gmail.com',
-      subject: `New contact form submission from ${name}`,
-      reply_to: email,
-      html: `
-        <p><strong>Name:</strong> ${name}</p>
-        <p><strong>Email:</strong> ${email}</p>
-        <p><strong>Message:</strong></p>
-        <p>${message}</p>
-      `,
-    });
+  await resend.emails.send({
+  from: 'TrendWise <no-reply@obiorachibuike.com>', // Replace with a verified sender
+  to: 'obiorachibuike22@gmail.com',
+  subject: `New contact form submission from ${name}`,
+  replyTo: email,
+  html: `
+    <p><strong>Name:</strong> ${name}</p>
+    <p><strong>Email:</strong> ${email}</p>
+    <p><strong>Message:</strong></p>
+    <p>${message}</p>
+  `,
+});
+
 
     return NextResponse.json({ message: 'Email sent successfully' }, { status: 200 });
   } catch (error) {
