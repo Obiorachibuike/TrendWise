@@ -11,6 +11,25 @@ import axios from "axios";
 import type { JWT } from "next-auth/jwt";
 import type { Session, User } from "next-auth";
 
+// Extend the JWT type to include `id`
+declare module "next-auth/jwt" {
+  interface JWT {
+    id?: string;
+  }
+}
+
+// Extend the Session type to include `user.id`
+declare module "next-auth" {
+  interface Session {
+    user: {
+      name?: string | null;
+      email?: string | null;
+      image?: string | null;
+      id?: string;
+    };
+  }
+}
+
 const authOptions: NextAuthOptions = {
   providers: [
     GoogleProvider({
@@ -48,7 +67,7 @@ const authOptions: NextAuthOptions = {
   ],
   secret: process.env.NEXTAUTH_SECRET,
   callbacks: {
-    async signIn({ user }) {
+    async signIn({ user }): Promise<boolean> {
       try {
         const res = await axios.get(`${process.env.NEXTAUTH_URL}/api/users`, {
           params: { email: user.email },
@@ -68,15 +87,15 @@ const authOptions: NextAuthOptions = {
         return false;
       }
     },
-    async jwt({ token, user }) {
-      if (user?.id) {
+    async jwt({ token, user }): Promise<JWT> {
+      if (user && user.id) {
         token.id = user.id;
       }
       return token;
     },
-    async session({ session, token }) {
+    async session({ session, token }): Promise<Session> {
       if (session.user && token.id) {
-        session.user.id = token.id as string;
+        session.user.id = token.id;
       }
       return session;
     },
