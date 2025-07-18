@@ -1,24 +1,19 @@
-// Next.js API route example
-
-import { NextApiRequest, NextApiResponse } from 'next';
+import { NextRequest, NextResponse } from 'next/server';
 import { Resend } from 'resend';
 
 const resend = new Resend(process.env.RESEND_API_KEY!);
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ message: 'Method not allowed' });
-  }
-
-  const { name, email, message } = req.body;
-
-  if (!name || !email || !message) {
-    return res.status(400).json({ message: 'Missing required fields' });
-  }
-
+export async function POST(req: NextRequest) {
   try {
+    const body = await req.json();
+    const { name, email, message } = body;
+
+    if (!name || !email || !message) {
+      return NextResponse.json({ message: 'Missing required fields' }, { status: 400 });
+    }
+
     await resend.emails.send({
-      from: 'Your Name <no-reply@yourdomain.com>', // Must be verified in Resend
+      from: 'Your Name <no-reply@yourdomain.com>', // Replace with a verified sender
       to: 'obuorachibuike22@gmail.com',
       subject: `New contact form submission from ${name}`,
       reply_to: email,
@@ -30,9 +25,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       `,
     });
 
-    return res.status(200).json({ message: 'Email sent successfully' });
+    return NextResponse.json({ message: 'Email sent successfully' }, { status: 200 });
   } catch (error) {
     console.error('Resend email error:', error);
-    return res.status(500).json({ message: 'Failed to send email' });
+    return NextResponse.json({ message: 'Failed to send email' }, { status: 500 });
   }
 }
