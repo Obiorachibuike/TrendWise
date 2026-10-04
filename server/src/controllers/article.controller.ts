@@ -1,10 +1,14 @@
 import { Request, Response } from 'express';
+import mongoose from 'mongoose';
 import { Article } from '../models/Article.model';
-import { getGoogleTrends } from '../utils/trendingTopics';
 import { generateArticleFromTopic } from '../utils/generateArticle';
+import { generateArticlesFromTrends, purgeOldArticles } from '../services/articleService';
 
+// Re-exported so existing importers of these types keep working, but there is
+// now exactly one definition (in utils/generateArticle.ts).
+export type { ArticleInput } from '../utils/generateArticle';
 
-// GET /articles
+// GET /api/articles
 export const getArticles = async (_req: Request, res: Response): Promise<void> => {
   try {
     const articles = await Article.find().sort({ createdAt: -1 });
@@ -16,23 +20,23 @@ export const getArticles = async (_req: Request, res: Response): Promise<void> =
     res.json(articles);
   } catch (err) {
     console.error('❌ Failed to fetch articles:', err);
-    res.status(500).json({ error: 'Failed to fetch articles', err });
+    res.status(500).json({ error: 'Failed to fetch articles' });
   }
 };
 
-// POST /articles
+// POST /api/articles
 export const createArticle = async (req: Request, res: Response): Promise<void> => {
   try {
     const article = new Article(req.body);
     await article.save();
     res.status(201).json(article);
-  } catch (error) {
-    console.error('❌ Error creating article:', error);
-    res.status(500).json({ message: 'Failed to create article' });
+  } catch (error: any) {
+    console.error('❌ Error creating article:', error.message ?? error);
+    res.status(400).json({ message: 'Failed to create article', error: error.message });
   }
 };
 
-// GET /articles/slug/:slug
+// GET /api/articles/slug/:slug
 export const getArticleBySlug = async (req: Request, res: Response): Promise<void> => {
   try {
     const article = await Article.findOne({ slug: req.params.slug });
@@ -49,11 +53,18 @@ export const getArticleBySlug = async (req: Request, res: Response): Promise<voi
   }
 };
 
-
-
+// GET /api/articles/id/:id
 export const getArticleById = async (req: Request, res: Response): Promise<void> => {
+  const { id } = req.params;
+
+  // An invalid id used to reach findById() and surface as a 500 CastError.
+  if (!mongoose.isValidObjectId(id)) {
+    res.status(400).json({ message: 'Invalid article id' });
+    return;
+  }
+
   try {
-    const article = await Article.findById(req.params.id);
+    const article = await Article.findById(id);
 
     if (!article) {
       res.status(404).json({ message: 'Article not found' });
@@ -67,81 +78,76 @@ export const getArticleById = async (req: Request, res: Response): Promise<void>
   }
 };
 
-
-
-// ✅ Define types at the top
-export type NewsItem = {
-  title: string;
-  country: string;
-  code: string;
-};
-
-export type ArticleInput = {
-  title: string;
-  country: string;
-  code: string;
-  source: string;
-};
-
-// POST /articles/generate
+/**
+ * POST /api/articles/generate  (and /api/admin/articles/generate)
+ *
+ * The call to generateArticleFromTopic used to be commented out, so this handler
+ * — and the 6-hourly cron in index.ts that drives it — fetched trends, logged
+ * them, saved nothing, and still reported 200 "Generated articles from trending
+ * topics". Combined with the nightly 7-day purge that meant the site slowly
+ * emptied itself and never refilled.
+ */
 export const generateArticles = async (_req: Request, res: Response): Promise<void> => {
   try {
-    const trends: NewsItem[] = await getGoogleTrends();
+    const result = await generateArticlesFromTrends();
 
-    if (!trends || trends.length === 0) {
+    if (result.topics === 0) {
       console.warn('⚠️ No trending topics returned');
       res.status(500).json({ message: 'No trends available to generate articles' });
       return;
     }
 
-    const createdSlugs: string[] = [];
-
-    for (const topic of trends) {
-      console.log(`📰 Topic: ${topic.title} | Country: ${topic.country} (${topic.code})`);
-
-      const input: ArticleInput = {
-        title: topic.title,
-        country: topic.country,
-        code: topic.code,
-        source: 'NewsAPI',
-      };
-
-//       try {
-//      const article = await generateArticleFromTopic(input);
-//  // accepts ArticleInput now
-//         createdSlugs.push(article.slug);
-//       } catch (genErr) {
-//         console.error(`⚠️ Failed to generate article for t  opic "${topic.title}":`, genErr);
-//       }
-    }
-
-    res.status(200).json({
-      message: 'Generated articles from trending topics',
-      slugs: createdSlugs,
-    });
-  } catch (error) {
-    console.error('❌ Error generating articles from trends:', error);
+    res.status(200).json({ message: 'Generated articles from trending topics', ...result });
+  } catch (error: any) {
+    console.error('❌ Error generating articles from trends:', error.message ?? error);
     res.status(500).json({ message: 'Failed to generate trending articles' });
   }
 };
 
+/**
+ * POST /api/admin/articles/generate-topic
+ * Backs the "topic" box in the admin dashboard.
+ */
+export const generateArticleByTopic = async (req: Request, res: Response): Promise<void> => {
+  const { topic, country = 'United States', code = 'us', source = 'Admin' } = req.body ?? {};
 
-export const deleteOldArticles = async (req: Request, res: Response) => {
+  if (!topic || typeof topic !== 'string' || !topic.trim()) {
+    res.status(400).json({ message: 'A topic is required' });
+    return;
+  }
+
   try {
-    const oneWeekAgo = new Date();
-    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-
-    const result = await Article.deleteMany({
-      createdAt: { $lt: oneWeekAgo },
+    const article = await generateArticleFromTopic({
+      title: topic.trim(),
+      country,
+      code,
+      source,
     });
 
-    res.status(200).json({
-      message: 'Old articles deleted successfully',
-      deletedCount: result.deletedCount,
-    });
-  } catch (error) {
-    console.error('Error deleting old articles:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(201).json({ message: 'Article generated', article });
+  } catch (error: any) {
+    console.error(`❌ Failed to generate article for "${topic}":`, error.message ?? error);
+    res.status(500).json({ message: 'Failed to generate article' });
   }
 };
 
+/**
+ * Deletes articles older than ARTICLE_RETENTION_DAYS (default 7).
+ * Runs nightly from index.ts.
+ */
+export const deleteOldArticles = async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const { deletedCount, cutoff } = await purgeOldArticles();
+
+    console.log(`🧹 Purged ${deletedCount} article(s) older than ${cutoff.toISOString()}`);
+
+    res.status(200).json({
+      message: 'Old articles deleted successfully',
+      deletedCount,
+      cutoff,
+    });
+  } catch (error) {
+    console.error('❌ Error deleting old articles:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};

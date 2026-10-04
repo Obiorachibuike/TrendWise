@@ -5,8 +5,8 @@ import { useEffect, useState } from 'react';
 import { format } from 'date-fns';
 import dynamic from 'next/dynamic';
 import { useSession } from 'next-auth/react';
+import { apiUrl } from '../../lib/api';
 
-const API = process.env.NEXT_PUBLIC_BASE_URL!;
 const CommentForm = dynamic(() => import('../../components/CommentForm'), { ssr: false });
 
 export default function ArticleViewer() {
@@ -25,7 +25,7 @@ export default function ArticleViewer() {
       setNotFound(false);
 
       try {
-        const articleRes = await fetch(`${API}/api/articles/id/${id}`);
+        const articleRes = await fetch(apiUrl(`/api/articles/id/${id}`));
         if (!articleRes.ok) {
           if (articleRes.status === 404) setNotFound(true);
           else setError('Failed to load article');
@@ -35,7 +35,9 @@ export default function ArticleViewer() {
         const articleData = await articleRes.json();
         setArticle(articleData);
 
-        const commentRes = await fetch(`${API}/comments/${id}`);
+        // Was `${API}/comments/${id}` — the server mounts comments under /api,
+        // so this always 404'd and the section silently stayed empty.
+        const commentRes = await fetch(apiUrl(`/api/comments/${id}`));
         if (commentRes.ok) {
           const commentData = await commentRes.json();
           setComments(commentData);
@@ -99,7 +101,12 @@ export default function ArticleViewer() {
       {/* Metadata */}
       <div className="text-sm text-gray-500 mb-6">
         <span>By {article.author?.name || 'Anonymous'} · </span>
-        <span>{format(new Date(article.createdAt), 'MMMM dd, yyyy')}</span>
+        {/* date-fns throws on an Invalid Date, which would blank the whole page */}
+        <span>
+          {article.createdAt && !isNaN(new Date(article.createdAt).getTime())
+            ? format(new Date(article.createdAt), 'MMMM dd, yyyy')
+            : ''}
+        </span>
       </div>
 
       {/* Main Image */}
@@ -118,7 +125,7 @@ export default function ArticleViewer() {
       />
 
       {/* Media */}
-      {article.media?.images?.length > 0 && (
+      {(article.media?.images?.length ?? 0) > 0 && (
         <section className="mt-12">
           <h2 className="text-2xl font-semibold mb-6 text-gray-800">More Images</h2>
           <div className="grid grid-cols-2 gap-6">
@@ -140,11 +147,14 @@ export default function ArticleViewer() {
         {comments.length > 0 ? (
           comments.map((c, i) => (
             <div
-              key={i}
+              key={c._id ?? i}
               className="border-b border-gray-300 py-4 last:border-0"
             >
               <p className="text-xs text-gray-400 mb-1">
-                {new Date(c.createdAt).toLocaleString()}
+                {c.userId?.name ? `${c.userId.name} · ` : ''}
+                {c.createdAt && !isNaN(new Date(c.createdAt).getTime())
+                  ? new Date(c.createdAt).toLocaleString()
+                  : ''}
               </p>
               <p className="text-gray-700">{c.content}</p>
             </div>

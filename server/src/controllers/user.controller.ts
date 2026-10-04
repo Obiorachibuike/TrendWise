@@ -1,8 +1,8 @@
 import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
+import mongoose from 'mongoose';
 import { User } from '../models/User.model';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
+import { JWT_SECRET } from '../config/env';
 
 const generateToken = (userId: string, email: string): string => {
   return jwt.sign({ userId, email }, JWT_SECRET, { expiresIn: '5h' });
@@ -17,7 +17,7 @@ export const getUsers = async (_req: Request, res: Response): Promise<void> => {
     res.json(users);
   } catch (err) {
     console.error('❌ Failed to fetch users:', err);
-    res.status(500).json({ error: 'Failed to fetch users', err });
+    res.status(500).json({ error: 'Failed to fetch users' });
   }
 };
 
@@ -38,7 +38,10 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
 
     if (!user) {
       console.log(`🆕 Creating new user with email: ${email}`);
-      const role = email === 'obiorachibuike22@gmail.com' ? 'admin' : 'user';
+      const adminEmails = (process.env.ADMIN_EMAILS || 'obiorachibuike22@gmail.com')
+        .split(',')
+        .map((e) => e.trim().toLowerCase());
+      const role = adminEmails.includes(email.toLowerCase()) ? 'admin' : 'user';
       user = new User({ email, name, image, role });
       await user.save();
       console.log('✅ User created successfully');
@@ -69,7 +72,7 @@ export const createUser = async (req: Request, res: Response): Promise<void> => 
     res.status(200).json({ message: 'User processed', user, token });
   } catch (err) {
     console.error('❌ Error creating or updating user:', err);
-    res.status(500).json({ error: 'Failed to create or fetch user', err });
+    res.status(500).json({ error: 'Failed to create or fetch user' });
   }
 };
 
@@ -79,6 +82,11 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
   console.log(`📥 [GET] /api/users/${userId} - Fetching user by ID`);
 
   try {
+    if (!mongoose.isValidObjectId(userId)) {
+      res.status(400).json({ error: 'Invalid user id' });
+      return;
+    }
+
     const user = await User.findById(userId);
     if (!user) {
       console.warn(`❌ User with ID ${userId} not found`);
@@ -89,7 +97,7 @@ export const getUserById = async (req: Request, res: Response): Promise<void> =>
     res.json(user);
   } catch (err) {
     console.error('❌ Failed to fetch user by ID:', err);
-    res.status(500).json({ error: 'Failed to fetch user', err });
+    res.status(500).json({ error: 'Failed to fetch user' });
   }
 };
 
@@ -117,6 +125,6 @@ export const getUserByEmail = async (req: Request, res: Response): Promise<void>
     res.json({ user });
   } catch (err) {
     console.error('❌ Failed to fetch user by email:', err);
-    res.status(500).json({ error: 'Failed to fetch user by email', err });
+    res.status(500).json({ error: 'Failed to fetch user by email' });
   }
 };
