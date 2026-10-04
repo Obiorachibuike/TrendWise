@@ -2,6 +2,7 @@
 
 import { useSession } from "next-auth/react";
 import { useState } from "react";
+import { apiFetch } from "../lib/api";
 
 interface CommentFormProps {
   articleId: string;
@@ -14,35 +15,61 @@ interface CommentFormProps {
 export default function CommentForm({ articleId, user }: CommentFormProps) {
   const { data: session } = useSession();
   const [comment, setComment] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
+  const displayName = user?.name ?? session?.user?.name ?? "";
+  const displayEmail = user?.email ?? session?.user?.email ?? "";
+
+  /**
+   * Three things were broken here:
+   *  1. the URL was `${NEXT_PUBLIC_BASE_URL}/comments`, but the server mounts
+   *     comments at `/api/comments` — every submit 404'd;
+   *  2. no Authorization header, so verifyToken rejected it with 401 anyway;
+   *  3. the body sent `userName`/`userEmail` and no `userId`, which failed the
+   *     Comment schema's required `userId` and crashed the API (unhandled
+   *     rejection in a handler with no try/catch).
+   * The author now comes from the backend JWT server-side.
+   */
   const submitComment = async () => {
-    if ((!session && !user) || !comment.trim()) return;
+    const token = session?.user?.token;
+    if (!token || !comment.trim()) return;
+
+    setSubmitting(true);
+    setError(null);
 
     try {
-      await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/comments`, {
+      await apiFetch("/api/comments", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-user-email": user?.email ?? session?.user?.email ?? "",
-        },
-        body: JSON.stringify({
-          articleId,
-          content: comment,
-          userName: user?.name ?? session?.user?.name ?? "",
-          userEmail: user?.email ?? session?.user?.email ?? "",
-        }),
+        authToken: token,
+        body: JSON.stringify({ articleId, content: comment.trim() }),
       });
       setComment("");
-    } catch (error) {
-      console.error("Failed to post comment:", error);
+    } catch (err: any) {
+      console.error("Failed to post comment:", err);
+      setError(err?.message ?? "Failed to post comment");
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  if (!session && !user)
-    return <p className="text-gray-500">Login to comment.</p>;
+  if (!session && !user) return <p className="text-gray-500">Login to comment.</p>;
+
+  if (!session?.user?.token)
+    return (
+      <p className="text-gray-500">
+        Your session has no API token. Please sign out and back in.
+      </p>
+    );
 
   return (
     <div>
+      <p className="text-sm text-gray-600 mb-2">
+        Commenting as <span className="font-semibold">{displayName || displayEmail}</span>
+      </p>
+
+      {error && <p className="text-sm text-red-600 mb-2">{error}</p>}
+
       <textarea
         value={comment}
         onChange={(e) => setComment(e.target.value)}
@@ -52,9 +79,10 @@ export default function CommentForm({ articleId, user }: CommentFormProps) {
       />
       <button
         onClick={submitComment}
-        className="mt-2 bg-blue-600 px-4 py-2 text-white rounded hover:bg-blue-700"
+        disabled={submitting || !comment.trim()}
+        className="mt-2 bg-blue-600 px-4 py-2 text-white rounded hover:bg-blue-700 disabled:opacity-50"
       >
-        Post Comment
+        {submitting ? "Posting..." : "Post Comment"}
       </button>
     </div>
   );

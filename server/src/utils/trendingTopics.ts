@@ -59,6 +59,39 @@ type NewsItem = {
   source: string;
 };
 
+/**
+ * This loop used to iterate EVERY country (29) x EVERY category (9) = 261
+ * upstream requests per run, and the cron runs 4x a day — ~1044 requests/day
+ * against free tiers that allow 100 (GNews) to 500 (NewsAPI). The daily quota
+ * was exhausted within the first run, every later call returned 403, and the
+ * cron's "Detected 403 Forbidden - stopping the cron job" branch was the
+ * symptom. Defaults are now small and overridable via env.
+ */
+const parseList = (raw: string | undefined, fallback: string[]): string[] =>
+  (raw ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => s.toLowerCase()) ?? fallback;
+
+const enabledCodes = (() => {
+  const requested = parseList(process.env.TRENDS_COUNTRIES, ['us', 'gb', 'in']);
+  return supportedCountries.filter(({ code }) => requested.includes(code));
+})();
+
+const enabledCategories = (() => {
+  const requested = parseList(process.env.TRENDS_CATEGORIES, ['general', 'technology', 'business']);
+  return categories.filter((c) => requested.includes(c));
+})();
+
+const MAX_PER_QUERY = Number(process.env.TRENDS_MAX_PER_QUERY ?? 3);
+const REQUEST_GAP_MS = Number(process.env.TRENDS_REQUEST_GAP_MS ?? 1200);
+const MAX_RESULTS = Number(process.env.TRENDS_MAX_RESULTS ?? 40);
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const isQuotaError = (status?: number) => status === 401 || status === 402 || status === 403 || status === 429;
+
 function isValidTitle(title: any): boolean {
   if (!title || typeof title !== 'string') return false;
 
@@ -68,62 +101,108 @@ function isValidTitle(title: any): boolean {
 
 export const getGoogleTrends = async (): Promise<NewsItem[]> => {
   const results: NewsItem[] = [];
+  const seen = new Set<string>();
 
-  for (const { name, code } of supportedCountries) {
-    for (const category of categories) {
-      const gnewsUrl = `https://gnews.io/api/v4/top-headlines?category=${category}&lang=en&country=${code}&max=3&apikey=${GNEWS_API_KEY}`;
-      const newsApiUrl = `https://newsapi.org/v2/top-headlines?country=${code}&category=${category}&pageSize=3&apiKey=${NEWSAPI_KEY}`;
+  // Once a provider rejects us for auth/quota reasons, stop spending its
+  // remaining budget for this run instead of repeating a doomed call 261 times.
+  let gnewsDisabled = !GNEWS_API_KEY;
+  let newsapiDisabled = !NEWSAPI_KEY;
 
-      try {
-        const { data } = await axios.get(gnewsUrl);
+  if (gnewsDisabled) console.warn('⚠️ GNEWS_API_KEY not set — skipping GNews');
+  if (newsapiDisabled) console.warn('⚠️ NEWSAPI_KEY not set — skipping NewsAPI');
 
-        if (data.articles?.length > 0) {
-          const formatted = data.articles
-            .filter((article: any) => isValidTitle(article.title))
-            .map((article: any) => ({
-              title: article.title,
-              description: article.description || '',
-              country: name,
-              code,
-              category,
-              source: 'GNews',
-            }));
+  const push = (items: NewsItem[]) => {
+    for (const item of items) {
+      const key = item.title.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      results.push(item);
+      if (results.length >= MAX_RESULTS) return;
+    }
+  };
 
-          results.push(...formatted);
-          console.log(`✅ GNews: ${formatted.length} valid articles for ${name} (${category})`);
-        } else {
-          throw new Error('No GNews articles found');
-        }
-      } catch (gnewsErr: any) {
-        console.warn(`⚠️ GNews failed for ${name} (${category}):`, gnewsErr.message);
+  outer: for (const { name, code } of enabledCodes) {
+    for (const category of enabledCategories) {
+      if (results.length >= MAX_RESULTS) break outer;
+      if (gnewsDisabled && newsapiDisabled) {
+        console.warn('⚠️ Both news providers are unavailable — stopping early.');
+        break outer;
+      }
+
+      if (!gnewsDisabled) {
         try {
-          const { data } = await axios.get(newsApiUrl);
+          const { data } = await axios.get(
+            `https://gnews.io/api/v4/top-headlines?category=${category}&lang=en&country=${code}&max=${MAX_PER_QUERY}&apikey=${GNEWS_API_KEY}`
+          );
 
           if (data.articles?.length > 0) {
-            const formatted = data.articles
-              .filter((article: any) => isValidTitle(article.title))
-              .map((article: any) => ({
-                title: article.title,
-                description: article.description || '',
+            const formatted: NewsItem[] = data.articles
+              .filter((a: any) => isValidTitle(a.title))
+              .map((a: any) => ({
+                title: a.title,
+                description: a.description || '',
+                country: name,
+                code,
+                category,
+                source: 'GNews',
+              }));
+
+            push(formatted);
+            console.log(`✅ GNews: ${formatted.length} valid articles for ${name} (${category})`);
+          } else {
+            console.warn(`⚠️ GNews returned nothing for ${name} (${category})`);
+          }
+        } catch (gnewsErr: any) {
+          const status = gnewsErr?.response?.status;
+          if (isQuotaError(status)) {
+            console.error(`⛔️ GNews returned ${status} (auth/quota) — disabling GNews for this run.`);
+            gnewsDisabled = true;
+          } else {
+            console.warn(`⚠️ GNews failed for ${name} (${category}): ${gnewsErr?.message}`);
+          }
+        }
+      }
+
+      // Only fall back to NewsAPI when GNews didn't produce anything for this slot.
+      const gotFromGNews = results.some((r) => r.code === code && r.category === category);
+      if (!gotFromGNews && !newsapiDisabled) {
+        try {
+          const { data } = await axios.get(
+            `https://newsapi.org/v2/top-headlines?country=${code}&category=${category}&pageSize=${MAX_PER_QUERY}&apiKey=${NEWSAPI_KEY}`
+          );
+
+          if (data.articles?.length > 0) {
+            const formatted: NewsItem[] = data.articles
+              .filter((a: any) => isValidTitle(a.title))
+              .map((a: any) => ({
+                title: a.title,
+                description: a.description || '',
                 country: name,
                 code,
                 category,
                 source: 'NewsAPI',
               }));
 
-            results.push(...formatted);
+            push(formatted);
             console.log(`✅ NewsAPI: ${formatted.length} valid articles for ${name} (${category})`);
           } else {
-            throw new Error('No NewsAPI articles found');
+            console.warn(`⚠️ NewsAPI returned nothing for ${name} (${category})`);
           }
         } catch (newsApiErr: any) {
-          console.error(`❌ Both APIs failed for ${name} (${category})`);
+          const status = newsApiErr?.response?.status;
+          if (isQuotaError(status)) {
+            console.error(`⛔️ NewsAPI returned ${status} (auth/quota) — disabling NewsAPI for this run.`);
+            newsapiDisabled = true;
+          } else {
+            console.error(`❌ NewsAPI failed for ${name} (${category}): ${newsApiErr?.message}`);
+          }
         }
       }
 
-      await new Promise((res) => setTimeout(res, 1200));
+      await sleep(REQUEST_GAP_MS);
     }
   }
 
+  console.log(`📊 Trend scan finished with ${results.length} topics`);
   return results;
 };

@@ -54,6 +54,9 @@ frontend/public/build/
 render.yaml
 
 # === Sitemaps & Temp ===
-sitemap.xml
+# Anchored to the repo root on purpose: a bare `sitemap.xml` pattern matches at
+# any depth and was silently swallowing the App Router route directory
+# trendwise/app/sitemap.xml/, so the route never got committed.
+/sitemap.xml
 *.tmp
 temp/

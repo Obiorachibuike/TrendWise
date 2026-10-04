@@ -1,7 +1,7 @@
 'use client';
 
 import { useSearchParams, useRouter } from 'next/navigation';
-import { useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
 
 const errorMessages: Record<string, string> = {
   AccessDenied: 'Access Denied. You do not have permission to sign in.',
@@ -15,7 +15,7 @@ const errorMessages: Record<string, string> = {
   default: 'Something went wrong during sign-in.',
 };
 
-export default function AuthErrorPage() {
+function AuthErrorContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const error = searchParams.get('error') || 'default';
@@ -44,5 +44,25 @@ export default function AuthErrorPage() {
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * `useSearchParams()` bails out of static rendering, so Next requires it to sit
+ * inside a Suspense boundary. Without one, `next build` failed while
+ * prerendering /auth/error:
+ *   "useSearchParams() should be wrapped in a suspense boundary"
+ */
+export default function AuthErrorPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-red-50">
+          <p className="text-gray-600">Loading…</p>
+        </div>
+      }
+    >
+      <AuthErrorContent />
+    </Suspense>
   );
 }
